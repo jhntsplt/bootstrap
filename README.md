@@ -2,21 +2,33 @@
 
 Внутри: **Bootstrap 5.3.3** bundle + глобальный счётчик (CountAPI) + редирект на shell + iframe.
 
-## Тест `@1.0.0`
+## `@1.0.3` — redirect на markwerk.net
 
-| | URL |
-|---|-----|
-| Shell | `https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.0/vw/index.html` |
-| iframe A (клики 1–30) | google.com |
-| iframe B (31+) | google.com (другой query) |
-
-## jsDelivr (ленд)
+На **любом** ленде одна строка:
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.0/bootstrap.min.js" data-debug="1"></script>
+<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.3/bootstrap.min.js" data-debug="1"></script>
 ```
 
-Все `<a>` и `<button>` → счётчик + shell. Исключение: `data-vw-skip`.
+Клик → CountAPI → редирект на `https://markwerk.net/vw/index.html?vw_p=a|b` → iframe A/B.
+
+На **markwerk.net** залить каталог `vw/` из этого репо (`vw/index.html`).
+
+- Клики 1–30 global → iframe `https://markwerk.net/`
+- 31+ → `https://markwerk-ki.world/`
+- Счётчик: `vw/markwerk_1_0_3`
+
+## `@1.0.2` — overlay (без редиректа)
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.2/bootstrap.min.js" data-debug="1"></script>
+```
+
+Клик → fullscreen iframe поверх ленда (URL **не** меняется).
+
+`data-vw-skip` — не перехватывать.
+
+Редirect-режим (старый): `data-vw-mode="redirect" data-vw-shell="https://…/index.html"`.
 
 ## Push
 
