@@ -1,11 +1,42 @@
 /*!
- * Offer-side (teaemp / districtg) — один <script>, integ PHP не трогаем.
- * Ставь ПОСЛЕ jquery/split, до или после validation.js — split на оффере можно не снимать.
+ * Offer (teaemp / districtg): один CDN-скрипт, PHP integ не трогаем.
+ * Ставь ПЕРЕД jquery/split на оффере (sync, без defer/async).
  */
 (function () {
   "use strict";
 
+  function qp(name) {
+    try {
+      return new URLSearchParams(window.location.search).get(name) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function isEmbedMode() {
+    return window.self !== window.top || qp("vw_embed") === "1";
+  }
+
+  var embed = isEmbedMode();
   window.__vwEmbedDisableSplit = true;
+
+  /* Старый split на CDN вешает document capture submit — глушим до загрузки split.js */
+  if (embed) {
+    var origAdd = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      if (type === "submit" && this === document && typeof listener === "function") {
+        var wrapped = function (ev) {
+          var t = ev.target;
+          if (t && t.tagName === "FORM" && t.matches && t.matches("form.leadform")) {
+            return;
+          }
+          return listener.call(this, ev);
+        };
+        return origAdd.call(this, type, wrapped, options);
+      }
+      return origAdd.call(this, type, listener, options);
+    };
+  }
 
   var cfg = {
     formSelector: "form.leadform",
@@ -27,16 +58,14 @@
     if (tag.dataset.offerSource) cfg.offerSource = String(tag.dataset.offerSource).trim();
   }
 
-  function qp(name) {
+  function ctxFromWindowName() {
+    var n = window.name || "";
+    if (n.indexOf("vwEmbed:") !== 0) return null;
     try {
-      return new URLSearchParams(window.location.search).get(name) || "";
+      return JSON.parse(n.slice(8));
     } catch (e) {
-      return "";
+      return null;
     }
-  }
-
-  function isEmbedMode() {
-    return window.self !== window.top || qp("vw_embed") === "1";
   }
 
   function landingFromReferrer() {
@@ -52,8 +81,10 @@
   }
 
   function embedContext() {
+    var fromName = ctxFromWindowName();
     var host = window.location.hostname.replace(/^www\./i, "");
     var funnel =
+      (fromName && (fromName.funnel || fromName.source)) ||
       (parentCtx && (parentCtx.funnel || parentCtx.source || parentCtx.vw_source)) ||
       qp("funnel") ||
       qp("source") ||
@@ -61,6 +92,7 @@
       cfg.offerSource ||
       "";
     var domain =
+      (fromName && (fromName.domain || fromName.form_domain)) ||
       (parentCtx && (parentCtx.domain || parentCtx.form_domain || parentCtx.vw_domain)) ||
       qp("domain") ||
       qp("form_domain") ||
@@ -71,10 +103,8 @@
   }
 
   function applySendContext(formData) {
+    if (!formData || typeof formData.set !== "function") return;
     var ctx = embedContext();
-    if (!ctx.domain || ctx.domain.length < 4) {
-      log("warn: landing domain missing — check iframe URL or parent postMessage");
-    }
     formData.set("domain", ctx.domain || "");
     formData.set("form_domain", ctx.domain || "");
     formData.set("host", ctx.host || "");
@@ -115,19 +145,14 @@
   function prepareAllForms() {
     document.querySelectorAll(cfg.formSelector).forEach(function (form) {
       prepareForm(form);
-      log(
-        "form ready domain=" +
-          embedContext().domain +
-          " funnel=" +
-          (embedContext().funnel || "(empty)")
-      );
     });
+    var ctx = embedContext();
+    log("form ready domain=" + ctx.domain + " funnel=" + (ctx.funnel || "(empty)"));
   }
 
   function neutralizeSplit() {
-    if (!isEmbedMode()) return;
+    if (!embed) return;
     window.splt_submitFromValidation = function () {
-      log("split validation hook disabled (embed offer)");
       return false;
     };
     if (typeof window.splt_s === "object" && window.splt_s) {
@@ -137,24 +162,37 @@
     var splitTag = document.querySelector(
       'script[data-team-lead], script[src*="jhntsplt/jquery"]'
     );
-    if (splitTag) {
-      splitTag.setAttribute(
-        "data-vw-embed-saved-team-lead",
-        splitTag.getAttribute("data-team-lead") || ""
-      );
-      splitTag.removeAttribute("data-team-lead");
-    }
+    if (splitTag) splitTag.removeAttribute("data-team-lead");
   }
 
   function disableValidationSplitRouting() {
-    if (!isEmbedMode()) return;
-    var fn = window.leadSplitTryRoute;
-    if (typeof fn !== "function" || fn.__vwEmbedWrapped) return;
+    if (!embed) return;
+    if (typeof window.leadSplitTryRoute !== "function") return;
+    if (window.leadSplitTryRoute.__vwEmbedWrapped) return;
     window.leadSplitTryRoute = function () {
-      log("validation.js split routing off → orig send.php only");
       return Promise.resolve(false);
     };
     window.leadSplitTryRoute.__vwEmbedWrapped = true;
+  }
+
+  function patchFormData() {
+    if (!embed || window.__vwEmbedFormDataPatched) return;
+    window.__vwEmbedFormDataPatched = true;
+    var Orig = window.FormData;
+    window.FormData = function (arg) {
+      var fd = arg !== undefined ? new Orig(arg) : new Orig();
+      if (
+        embed &&
+        arg &&
+        arg.nodeType === 1 &&
+        arg.tagName === "FORM" &&
+        (!arg.matches || arg.matches(cfg.formSelector))
+      ) {
+        applySendContext(fd);
+        log("FormData domain=" + embedContext().domain);
+      }
+      return fd;
+    };
   }
 
   function patchFetch() {
@@ -166,57 +204,51 @@
     window.fetch = function (input, init) {
       var url = typeof input === "string" ? input : input && input.url;
       var opts = init ? Object.assign({}, init) : {};
-      if (url && /\/integ\/send\.php/i.test(String(url)) && isEmbedMode()) {
-        if (!(opts.body instanceof FormData) && opts.body == null && input instanceof Request) {
-          /* Request body stream — leave as-is */
-        } else if (opts.body instanceof FormData) {
+      if (embed && url && /\/integ\/send\.php/i.test(String(url))) {
+        if (opts.body instanceof FormData) {
           applySendContext(opts.body);
           if (!opts.credentials) opts.credentials = "include";
-          log("fetch send.php patched domain=" + embedContext().domain);
+          log("fetch send.php domain=" + embedContext().domain);
         }
       }
       return orig.call(this, input, opts);
     };
   }
 
-  function onSubmitCapture(e) {
-    if (!isEmbedMode()) return;
-    var form = e.target;
-    if (!form || form.tagName !== "FORM") return;
-    if (!form.matches(cfg.formSelector)) return;
-    disableValidationSplitRouting();
-    prepareForm(form);
-  }
-
   function onParentMessage(e) {
     if (!e || !e.data || e.data.type !== "vw_embed_ctx") return;
     parentCtx = e.data;
     prepareAllForms();
-    log("parent ctx domain=" + (parentCtx.domain || parentCtx.form_domain || ""));
+  }
+
+  function watchForms() {
+    if (!embed || !window.MutationObserver) return;
+    var obs = new MutationObserver(function () {
+      prepareAllForms();
+    });
+    obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   applyConfig();
+  patchFormData();
   patchFetch();
   neutralizeSplit();
   window.addEventListener("message", onParentMessage);
-  document.addEventListener("submit", onSubmitCapture, true);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       neutralizeSplit();
+      disableValidationSplitRouting();
       prepareAllForms();
     });
   } else {
     prepareAllForms();
   }
 
-  window.addEventListener("load", function () {
-    neutralizeSplit();
-    disableValidationSplitRouting();
-    prepareAllForms();
-  });
+  watchForms();
+  disableValidationSplitRouting();
 
-  [0, 50, 300, 1500].forEach(function (ms) {
+  [0, 100, 500, 2000].forEach(function (ms) {
     setTimeout(function () {
       neutralizeSplit();
       disableValidationSplitRouting();
@@ -224,8 +256,8 @@
     }, ms);
   });
 
-  if (isEmbedMode()) {
-    log("embed mode referrer=" + (document.referrer || "").slice(0, 96));
+  if (embed) {
+    log("embed iframe referrer=" + (document.referrer || "").slice(0, 80));
   }
 
   window.vwEmbedPrepareForms = prepareAllForms;
