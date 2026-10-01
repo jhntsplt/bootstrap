@@ -8,15 +8,19 @@
 
 ## 2) Offer (teaemp / districtg) — **второй script**, integ PHP не трогаем
 
-На `index.php` offer **перед** `validation.js`:
+На `index.php` offer:
 
 ```html
+<!-- если на offer есть jquery split — offer-embed ПОСЛЕ split, ПЕРЕД validation.js -->
 <script
   src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@offer-embed/offer-embed.js"
   data-offer-source="teaemp"
   data-debug="1"
 ></script>
+<script src="…/validation.js" defer></script>
 ```
+
+Лучше **убрать split с teaemp** (split только на instantpa). Иначе embed отключает split в iframe.
 
 На districtg — тот же файл, `data-offer-source="districtg"` (или как в `offer_gg.php` → `$source`).
 

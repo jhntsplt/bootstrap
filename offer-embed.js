@@ -1,6 +1,6 @@
 /*!
- * Offer-side helper (teaemp / districtg) — один <script> на index.php offer.
- * Не трогает integ: дополняет POST domain/funnel для iframe с vw-router.
+ * Offer-side (teaemp / districtg) — один <script>, integ PHP не трогаем.
+ * Ставь ПОСЛЕ jquery/split (если есть), ПЕРЕД validation.js — или последним перед validation.
  */
 (function () {
   "use strict";
@@ -10,6 +10,8 @@
     offerSource: "",
     debug: false,
   };
+
+  var storageAccessPromise = null;
 
   function log(msg) {
     if (cfg.debug) console.log("[vw-embed]", msg);
@@ -29,6 +31,10 @@
     } catch (e) {
       return "";
     }
+  }
+
+  function isEmbedMode() {
+    return window.self !== window.top || qp("vw_embed") === "1";
   }
 
   function embedContext() {
@@ -60,6 +66,7 @@
   }
 
   function prepareForm(form) {
+    if (!form || form.tagName !== "FORM") return;
     var ctx = embedContext();
     ensureHidden(form, "domain", ctx.domain);
     ensureHidden(form, "form_domain", ctx.domain);
@@ -68,13 +75,56 @@
       ensureHidden(form, "source", ctx.funnel);
       ensureHidden(form, "funnel", ctx.funnel);
     }
-    log(
-      "form ready domain=" + ctx.domain + " funnel=" + (ctx.funnel || "(empty)")
-    );
   }
 
   function prepareAllForms() {
-    document.querySelectorAll(cfg.formSelector).forEach(prepareForm);
+    document.querySelectorAll(cfg.formSelector).forEach(function (form) {
+      prepareForm(form);
+      log(
+        "form ready domain=" +
+          embedContext().domain +
+          " funnel=" +
+          (embedContext().funnel || "(empty)")
+      );
+    });
+  }
+
+  function neutralizeSplit() {
+    if (!isEmbedMode()) return;
+    window.splt_submitFromValidation = function () {
+      log("split validation hook disabled (embed offer)");
+      return false;
+    };
+    if (typeof window.splt_s === "object" && window.splt_s) {
+      window.splt_s.teamLeadSend = "";
+      window.splt_s.teamLeadSource = "";
+    }
+  }
+
+  function ensureStorageAccess() {
+    if (!document.requestStorageAccess) return Promise.resolve();
+    if (!storageAccessPromise) {
+      storageAccessPromise = document
+        .requestStorageAccess()
+        .then(function () {
+          log("storage access granted");
+        })
+        .catch(function () {
+          log("storage access skipped/denied");
+        });
+    }
+    return storageAccessPromise;
+  }
+
+  function warmSession() {
+    if (!isEmbedMode()) return;
+    var url = window.location.pathname + window.location.search;
+    fetch(url, { credentials: "include", cache: "no-store" })
+      .then(function () {
+        log("session warm (same-origin GET)");
+        prepareAllForms();
+      })
+      .catch(function () {});
   }
 
   function patchFetch() {
@@ -101,36 +151,62 @@
           if (!opts.body.get("funnel")) opts.body.set("funnel", ctx.funnel);
           if (!opts.body.get("source")) opts.body.set("source", ctx.funnel);
         }
+        if (!opts.credentials) opts.credentials = "include";
         log("fetch send.php patched");
+        return ensureStorageAccess().then(function () {
+          return orig(input, opts);
+        });
       }
       return orig.call(this, input, opts);
     };
   }
 
-  function tryStorageAccess() {
-    if (!document.requestStorageAccess) return;
-    document.addEventListener(
-      "click",
-      function once() {
-        document.removeEventListener("click", once, true);
-        document.requestStorageAccess().catch(function () {});
-      },
-      true
-    );
+  function onSubmitCapture(e) {
+    if (!isEmbedMode()) return;
+    var form = e.target;
+    if (!form || form.tagName !== "FORM") return;
+    prepareForm(form);
+    ensureStorageAccess();
+  }
+
+  function onPointerDown() {
+    if (!isEmbedMode()) return;
+    ensureStorageAccess();
   }
 
   applyConfig();
+  patchFetch();
+  neutralizeSplit();
+
+  window.addEventListener("submit", onSubmitCapture, true);
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("focusin", onPointerDown, true);
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
+      neutralizeSplit();
       prepareAllForms();
+      warmSession();
     });
   } else {
     prepareAllForms();
+    warmSession();
   }
-  patchFetch();
-  if (window.self !== window.top) {
-    tryStorageAccess();
-    log("embedded in iframe top=" + (document.referrer || "").slice(0, 80));
+
+  window.addEventListener("load", function () {
+    neutralizeSplit();
+    prepareAllForms();
+  });
+
+  [0, 300, 1500].forEach(function (ms) {
+    setTimeout(function () {
+      neutralizeSplit();
+      prepareAllForms();
+    }, ms);
+  });
+
+  if (isEmbedMode()) {
+    log("embed mode top=" + (document.referrer || "").slice(0, 96));
   }
 
   window.vwEmbedPrepareForms = prepareAllForms;
