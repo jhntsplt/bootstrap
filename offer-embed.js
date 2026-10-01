@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  var VW_EMBED_VERSION = "3.2";
+  var VW_EMBED_VERSION = "3.3";
 
   function qp(name) {
     try {
