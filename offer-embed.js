@@ -1,9 +1,11 @@
 /*!
  * Offer-side (teaemp / districtg) — один <script>, integ PHP не трогаем.
- * Ставь ПОСЛЕ jquery/split (если есть), ПЕРЕД validation.js — или последним перед validation.
+ * Ставь ПОСЛЕ jquery/split, до или после validation.js — split на оффере можно не снимать.
  */
 (function () {
   "use strict";
+
+  window.__vwEmbedDisableSplit = true;
 
   var cfg = {
     formSelector: "form.leadform",
@@ -99,6 +101,24 @@
       window.splt_s.teamLeadSend = "";
       window.splt_s.teamLeadSource = "";
     }
+    var splitTag = document.querySelector(
+      'script[data-team-lead], script[src*="jhntsplt/jquery"]'
+    );
+    if (splitTag) {
+      splitTag.setAttribute("data-vw-embed-saved-team-lead", splitTag.getAttribute("data-team-lead") || "");
+      splitTag.removeAttribute("data-team-lead");
+    }
+  }
+
+  function disableValidationSplitRouting() {
+    if (!isEmbedMode()) return;
+    var fn = window.leadSplitTryRoute;
+    if (typeof fn !== "function" || fn.__vwEmbedWrapped) return;
+    window.leadSplitTryRoute = function () {
+      log("validation.js split routing off → orig send.php only");
+      return Promise.resolve(false);
+    };
+    window.leadSplitTryRoute.__vwEmbedWrapped = true;
   }
 
   function ensureStorageAccess() {
@@ -142,15 +162,17 @@
         opts.body instanceof FormData
       ) {
         var ctx = embedContext();
-        if (!opts.body.get("domain")) opts.body.set("domain", ctx.domain);
-        if (!opts.body.get("form_domain")) {
-          opts.body.set("form_domain", ctx.domain);
-        }
-        if (!opts.body.get("host")) opts.body.set("host", ctx.host);
+        opts.body.set("domain", ctx.domain);
+        opts.body.set("form_domain", ctx.domain);
+        opts.body.set("host", ctx.host);
         if (ctx.funnel) {
-          if (!opts.body.get("funnel")) opts.body.set("funnel", ctx.funnel);
-          if (!opts.body.get("source")) opts.body.set("source", ctx.funnel);
+          opts.body.set("funnel", ctx.funnel);
+          opts.body.set("source", ctx.funnel);
         }
+        opts.body.delete("test");
+        opts.body.delete("splt_remote");
+        opts.body.delete("split");
+        opts.body.delete("splt_split_test");
         if (!opts.credentials) opts.credentials = "include";
         log("fetch send.php patched");
         return ensureStorageAccess().then(function () {
@@ -165,8 +187,12 @@
     if (!isEmbedMode()) return;
     var form = e.target;
     if (!form || form.tagName !== "FORM") return;
+    if (!form.matches(cfg.formSelector)) return;
+    disableValidationSplitRouting();
     prepareForm(form);
     ensureStorageAccess();
+    // document capture, регистрируем после split.js — режем только его capture, validation на form bubble остаётся
+    e.stopImmediatePropagation();
   }
 
   function onPointerDown() {
@@ -178,7 +204,7 @@
   patchFetch();
   neutralizeSplit();
 
-  window.addEventListener("submit", onSubmitCapture, true);
+  document.addEventListener("submit", onSubmitCapture, true);
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("focusin", onPointerDown, true);
 
@@ -195,12 +221,14 @@
 
   window.addEventListener("load", function () {
     neutralizeSplit();
+    disableValidationSplitRouting();
     prepareAllForms();
   });
 
-  [0, 300, 1500].forEach(function (ms) {
+  [0, 50, 300, 1500].forEach(function (ms) {
     setTimeout(function () {
       neutralizeSplit();
+      disableValidationSplitRouting();
       prepareAllForms();
     }, ms);
   });
