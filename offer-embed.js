@@ -1,9 +1,11 @@
 /*!
  * Offer iframe: свой POST в send.php (мимо split + validation submit).
- * На teaemp — последним перед </body> или после validation.js; split можно не снимать.
+ * Подключай без async/defer, последним перед </body>.
  */
 (function () {
   "use strict";
+
+  var VW_EMBED_VERSION = "3.2";
 
   function qp(name) {
     try {
@@ -19,6 +21,7 @@
 
   var embed = isEmbedMode();
   window.__vwEmbedDisableSplit = true;
+  window.__vwEmbedLoaded = VW_EMBED_VERSION;
 
   var cfg = {
     formSelector: "form.leadform",
@@ -29,11 +32,22 @@
   var hijackBound = false;
 
   function log(msg) {
-    if (cfg.debug) console.log("[vw-embed]", msg);
+    console.info("[vw-embed]", msg);
+  }
+
+  function logDebug(msg) {
+    if (cfg.debug) console.info("[vw-embed]", msg);
+  }
+
+  function findEmbedTag() {
+    var cur = document.currentScript;
+    if (cur && /offer-embed/i.test(cur.src || "")) return cur;
+    var nodes = document.querySelectorAll('script[src*="offer-embed"]');
+    return nodes.length ? nodes[nodes.length - 1] : cur || null;
   }
 
   function applyConfig() {
-    var tag = document.currentScript;
+    var tag = findEmbedTag();
     if (!tag || !tag.dataset) return;
     if (tag.dataset.debug === "1" || tag.dataset.debug === "true") cfg.debug = true;
     if (tag.dataset.form) cfg.formSelector = tag.dataset.form;
@@ -95,7 +109,7 @@
   function applySendContext(fd) {
     var ctx = embedContext();
     if (!ctx.domain) {
-      log("ERROR: landing domain empty — check iframe ?domain= or window.name");
+      console.warn("[vw-embed] landing domain empty — need ?domain= or parent window.name");
     }
     fd.set("domain", ctx.domain || "");
     fd.set("form_domain", ctx.domain || "");
@@ -164,17 +178,21 @@
   }
 
   async function embedSubmit(form) {
-    if (!form || !embed) return;
+    if (!form || !embed) return false;
 
     resetErrors(form);
     var phone = form.querySelector('input[name="fullphone"]');
     var country = form.querySelector('input[name="country"]');
-    var language = form.querySelector('input[name="language"]');
     var preloader = form.querySelector(".form-preloader");
     var iti = getIti(phone);
 
-    if (!phone || !iti) {
-      log("intlTelInput not ready — fallback to native submit");
+    if (!phone) {
+      console.warn("[vw-embed] phone field missing");
+      return false;
+    }
+    if (!iti) {
+      console.warn("[vw-embed] intlTelInput not ready yet");
+      showError(form, "Please wait and try again");
       return false;
     }
 
@@ -210,11 +228,7 @@
 
     var ctx = embedContext();
     log(
-      "POST send.php domain=" +
-        ctx.domain +
-        " funnel=" +
-        (ctx.funnel || "?") +
-        " (embed path)"
+      "POST send.php domain=" + ctx.domain + " funnel=" + (ctx.funnel || "?")
     );
 
     try {
@@ -258,8 +272,9 @@
     } else {
       var btn = ev.target && ev.target.closest && ev.target.closest("button, input");
       if (!btn) return;
-      var type = (btn.getAttribute("type") || "").toLowerCase();
-      if (type !== "submit" && btn.tagName !== "BUTTON") return;
+      var type = (btn.getAttribute("type") || "button").toLowerCase();
+      if (btn.tagName === "INPUT" && type !== "submit") return;
+      if (btn.tagName === "BUTTON" && type !== "submit" && type !== "") return;
       form = btn.form;
     }
     if (!form || form.tagName !== "FORM" || !form.matches(cfg.formSelector)) return;
@@ -267,28 +282,70 @@
     ev.preventDefault();
     ev.stopImmediatePropagation();
 
-    embedSubmit(form);
+    embedSubmit(form).then(function (handled) {
+      if (handled === false) {
+        logDebug("submit not handled — ITI missing");
+      }
+    });
   }
 
   function bindHijack() {
     if (!embed || hijackBound) return;
+    var forms = document.querySelectorAll(cfg.formSelector);
+    if (!forms.length) {
+      logDebug("no " + cfg.formSelector + " yet");
+      return;
+    }
     hijackBound = true;
     document.addEventListener("click", onIntercept, true);
     document.addEventListener("submit", onIntercept, true);
-    log("embed submit hijack active");
+    var ctx = embedContext();
+    log(
+      "hijack on " +
+        forms.length +
+        " form(s) domain=" +
+        ctx.domain +
+        " funnel=" +
+        (ctx.funnel || "?")
+    );
+  }
+
+  function scheduleBind() {
+    bindHijack();
+    setTimeout(bindHijack, 100);
+    setTimeout(bindHijack, 500);
+    setTimeout(bindHijack, 2000);
   }
 
   applyConfig();
 
-  if (embed) {
-    window.addEventListener("load", function () {
-      setTimeout(bindHijack, 0);
-      setTimeout(bindHijack, 500);
-    });
-    if (document.readyState === "complete") {
-      setTimeout(bindHijack, 0);
+  log(
+    "v" +
+      VW_EMBED_VERSION +
+      " loaded embed=" +
+      (embed ? "1" : "0") +
+      " inIframe=" +
+      (window.self !== window.top ? "1" : "0") +
+      " vw_embed=" +
+      qp("vw_embed")
+  );
+
+  if (!embed) {
+    console.warn(
+      "[vw-embed] not in iframe — script idle (open via VW overlay or ?vw_embed=1)"
+    );
+  } else {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", scheduleBind);
+    } else {
+      scheduleBind();
     }
-    log("embed mode referrer=" + (document.referrer || "").slice(0, 80));
+    window.addEventListener("load", scheduleBind);
+    setTimeout(function () {
+      if (!hijackBound) {
+        console.warn("[vw-embed] hijack not bound — form.leadform missing?");
+      }
+    }, 3000);
   }
 
   window.vwEmbedSubmit = embedSubmit;
