@@ -1,6 +1,6 @@
 /*!
- * Offer (teaemp / districtg): один CDN-скрипт, PHP integ не трогаем.
- * Ставь ПЕРЕД jquery/split на оффере (sync, без defer/async).
+ * Offer iframe: свой POST в send.php (мимо split + validation submit).
+ * На teaemp — последним перед </body> или после validation.js; split можно не снимать.
  */
 (function () {
   "use strict";
@@ -20,31 +20,13 @@
   var embed = isEmbedMode();
   window.__vwEmbedDisableSplit = true;
 
-  /* Старый split на CDN вешает document capture submit — глушим до загрузки split.js */
-  if (embed) {
-    var origAdd = EventTarget.prototype.addEventListener;
-    EventTarget.prototype.addEventListener = function (type, listener, options) {
-      if (type === "submit" && this === document && typeof listener === "function") {
-        var wrapped = function (ev) {
-          var t = ev.target;
-          if (t && t.tagName === "FORM" && t.matches && t.matches("form.leadform")) {
-            return;
-          }
-          return listener.call(this, ev);
-        };
-        return origAdd.call(this, type, wrapped, options);
-      }
-      return origAdd.call(this, type, listener, options);
-    };
-  }
-
   var cfg = {
     formSelector: "form.leadform",
     offerSource: "",
     debug: false,
   };
 
-  var parentCtx = null;
+  var hijackBound = false;
 
   function log(msg) {
     if (cfg.debug) console.log("[vw-embed]", msg);
@@ -56,6 +38,7 @@
     if (tag.dataset.debug === "1" || tag.dataset.debug === "true") cfg.debug = true;
     if (tag.dataset.form) cfg.formSelector = tag.dataset.form;
     if (tag.dataset.offerSource) cfg.offerSource = String(tag.dataset.offerSource).trim();
+    if (tag.dataset.funnel) cfg.offerSource = String(tag.dataset.funnel).trim();
   }
 
   function ctxFromWindowName() {
@@ -80,185 +63,233 @@
     }
   }
 
+  function funnelFromOfferForm() {
+    var el = document.querySelector(
+      cfg.formSelector + ' input[name="funnel"], ' + cfg.formSelector + ' input[name="source"]'
+    );
+    return el && el.value ? String(el.value).trim() : "";
+  }
+
   function embedContext() {
     var fromName = ctxFromWindowName();
     var host = window.location.hostname.replace(/^www\./i, "");
     var funnel =
       (fromName && (fromName.funnel || fromName.source)) ||
-      (parentCtx && (parentCtx.funnel || parentCtx.source || parentCtx.vw_source)) ||
       qp("funnel") ||
       qp("source") ||
       qp("vw_source") ||
+      funnelFromOfferForm() ||
       cfg.offerSource ||
       "";
     var domain =
       (fromName && (fromName.domain || fromName.form_domain)) ||
-      (parentCtx && (parentCtx.domain || parentCtx.form_domain || parentCtx.vw_domain)) ||
       qp("domain") ||
       qp("form_domain") ||
       qp("vw_domain") ||
       landingFromReferrer() ||
-      host;
+      "";
+    if (!domain && !embed) domain = host;
     return { host: host, domain: domain, funnel: funnel };
   }
 
-  function applySendContext(formData) {
-    if (!formData || typeof formData.set !== "function") return;
+  function applySendContext(fd) {
     var ctx = embedContext();
-    formData.set("domain", ctx.domain || "");
-    formData.set("form_domain", ctx.domain || "");
-    formData.set("host", ctx.host || "");
+    if (!ctx.domain) {
+      log("ERROR: landing domain empty — check iframe ?domain= or window.name");
+    }
+    fd.set("domain", ctx.domain || "");
+    fd.set("form_domain", ctx.domain || "");
+    fd.set("host", ctx.host || "");
     if (ctx.funnel) {
-      formData.set("funnel", ctx.funnel);
-      formData.set("source", ctx.funnel);
+      fd.set("funnel", ctx.funnel);
+      fd.set("source", ctx.funnel);
     }
-    formData.delete("test");
-    formData.delete("splt_remote");
-    formData.delete("split");
-    formData.delete("splt_split_test");
+    fd.delete("test");
+    fd.delete("splt_remote");
+    fd.delete("split");
+    fd.delete("splt_split_test");
   }
 
-  function ensureHidden(form, name, value) {
-    if (value === undefined || value === null || value === "") return;
-    var el = form.querySelector('input[name="' + name + '"]');
-    if (!el) {
-      el = document.createElement("input");
-      el.type = "hidden";
-      el.name = name;
-      form.appendChild(el);
-    }
-    el.value = value;
-  }
-
-  function prepareForm(form) {
-    if (!form || form.tagName !== "FORM") return;
-    var ctx = embedContext();
-    ensureHidden(form, "domain", ctx.domain);
-    ensureHidden(form, "form_domain", ctx.domain);
-    ensureHidden(form, "host", ctx.host);
-    if (ctx.funnel) {
-      ensureHidden(form, "source", ctx.funnel);
-      ensureHidden(form, "funnel", ctx.funnel);
+  function showError(form, msg) {
+    var phone = form.querySelector('input[name="fullphone"]');
+    var errorMsg = form.querySelector(".error-msg");
+    if (phone) phone.classList.add("error");
+    if (errorMsg) {
+      errorMsg.innerHTML = msg;
+      errorMsg.classList.remove("hide");
     }
   }
 
-  function prepareAllForms() {
-    document.querySelectorAll(cfg.formSelector).forEach(function (form) {
-      prepareForm(form);
-    });
-    var ctx = embedContext();
-    log("form ready domain=" + ctx.domain + " funnel=" + (ctx.funnel || "(empty)"));
+  function resetErrors(form) {
+    var phone = form.querySelector('input[name="fullphone"]');
+    var errorMsg = form.querySelector(".error-msg");
+    if (phone) phone.classList.remove("error");
+    if (errorMsg) {
+      errorMsg.innerHTML = "";
+      errorMsg.classList.add("hide");
+    }
   }
 
-  function neutralizeSplit() {
-    if (!embed) return;
-    window.splt_submitFromValidation = function () {
-      return false;
-    };
-    if (typeof window.splt_s === "object" && window.splt_s) {
-      window.splt_s.teamLeadSend = "";
-      window.splt_s.teamLeadSource = "";
+  function getIti(phone) {
+    if (!phone) return null;
+    if (window.intlTelInput && typeof window.intlTelInput.getInstance === "function") {
+      return window.intlTelInput.getInstance(phone);
     }
-    var splitTag = document.querySelector(
-      'script[data-team-lead], script[src*="jhntsplt/jquery"]'
+    return phone._iti || null;
+  }
+
+  function responseError(data) {
+    if (!data) return "Unknown error";
+    return (
+      data.error_message ||
+      data.error ||
+      data.message ||
+      (data.crm_response &&
+        data.crm_response.message &&
+        (typeof data.crm_response.message === "string"
+          ? data.crm_response.message
+          : JSON.stringify(data.crm_response.message))) ||
+      "Unknown error"
     );
-    if (splitTag) splitTag.removeAttribute("data-team-lead");
   }
 
-  function disableValidationSplitRouting() {
-    if (!embed) return;
-    if (typeof window.leadSplitTryRoute !== "function") return;
-    if (window.leadSplitTryRoute.__vwEmbedWrapped) return;
-    window.leadSplitTryRoute = function () {
-      return Promise.resolve(false);
-    };
-    window.leadSplitTryRoute.__vwEmbedWrapped = true;
+  function sendAction(form) {
+    var action = form.getAttribute("action") || "";
+    if (!action) action = "integ/send.php";
+    try {
+      return new URL(action, window.location.href).toString();
+    } catch (e) {
+      return action;
+    }
   }
 
-  function patchFormData() {
-    if (!embed || window.__vwEmbedFormDataPatched) return;
-    window.__vwEmbedFormDataPatched = true;
-    var Orig = window.FormData;
-    window.FormData = function (arg) {
-      var fd = arg !== undefined ? new Orig(arg) : new Orig();
-      if (
-        embed &&
-        arg &&
-        arg.nodeType === 1 &&
-        arg.tagName === "FORM" &&
-        (!arg.matches || arg.matches(cfg.formSelector))
-      ) {
-        applySendContext(fd);
-        log("FormData domain=" + embedContext().domain);
-      }
-      return fd;
-    };
-  }
+  async function embedSubmit(form) {
+    if (!form || !embed) return;
 
-  function patchFetch() {
-    if (window.__vwEmbedFetchPatched) return;
-    window.__vwEmbedFetchPatched = true;
-    var orig = window.fetch;
-    if (typeof orig !== "function") return;
+    resetErrors(form);
+    var phone = form.querySelector('input[name="fullphone"]');
+    var country = form.querySelector('input[name="country"]');
+    var language = form.querySelector('input[name="language"]');
+    var preloader = form.querySelector(".form-preloader");
+    var iti = getIti(phone);
 
-    window.fetch = function (input, init) {
-      var url = typeof input === "string" ? input : input && input.url;
-      var opts = init ? Object.assign({}, init) : {};
-      if (embed && url && /\/integ\/send\.php/i.test(String(url))) {
-        if (opts.body instanceof FormData) {
-          applySendContext(opts.body);
-          if (!opts.credentials) opts.credentials = "include";
-          log("fetch send.php domain=" + embedContext().domain);
+    if (!phone || !iti) {
+      log("intlTelInput not ready — fallback to native submit");
+      return false;
+    }
+
+    if (!iti.isValidNumber()) {
+      showError(form, "Invalid number");
+      return true;
+    }
+
+    var originalPhone = phone.value;
+    phone.value = iti.getNumber();
+
+    if (country) {
+      if (country.value === "phone") {
+        country.value = iti.getSelectedCountryData().iso2.toUpperCase();
+      } else if (country.value === "ip") {
+        try {
+          var r = await fetch("https://ipapi.co/json");
+          var j = await r.json();
+          country.value = j.country || "DE";
+        } catch (e) {
+          country.value = "DE";
         }
+      } else if (country.value === "") {
+        country.value = "DE";
       }
-      return orig.call(this, input, opts);
-    };
+    }
+
+    if (preloader) preloader.classList.remove("hidden");
+
+    var fd = new FormData(form);
+    applySendContext(fd);
+    fd.append("js_token", Math.random().toString(36).substring(2, 15));
+
+    var ctx = embedContext();
+    log(
+      "POST send.php domain=" +
+        ctx.domain +
+        " funnel=" +
+        (ctx.funnel || "?") +
+        " (embed path)"
+    );
+
+    try {
+      var res = await fetch(sendAction(form), {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      var text = await res.text();
+      var data = null;
+      try {
+        data = JSON.parse(text);
+      } catch (e2) {
+        throw new Error(text.slice(0, 120));
+      }
+
+      if (data && data.success) {
+        window.location.href = "Thanks.php";
+        return true;
+      }
+
+      phone.value = originalPhone;
+      if (preloader) preloader.classList.add("hidden");
+      showError(form, responseError(data));
+      console.error("[vw-embed] send.php:", data || text.slice(0, 200));
+      return true;
+    } catch (err) {
+      phone.value = originalPhone;
+      if (preloader) preloader.classList.add("hidden");
+      showError(form, "Network error. Please try again.");
+      console.error("[vw-embed]", err);
+      return true;
+    }
   }
 
-  function onParentMessage(e) {
-    if (!e || !e.data || e.data.type !== "vw_embed_ctx") return;
-    parentCtx = e.data;
-    prepareAllForms();
+  function onIntercept(ev) {
+    if (!embed) return;
+    var form = null;
+    if (ev.type === "submit") {
+      form = ev.target;
+    } else {
+      var btn = ev.target && ev.target.closest && ev.target.closest("button, input");
+      if (!btn) return;
+      var type = (btn.getAttribute("type") || "").toLowerCase();
+      if (type !== "submit" && btn.tagName !== "BUTTON") return;
+      form = btn.form;
+    }
+    if (!form || form.tagName !== "FORM" || !form.matches(cfg.formSelector)) return;
+
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+
+    embedSubmit(form);
   }
 
-  function watchForms() {
-    if (!embed || !window.MutationObserver) return;
-    var obs = new MutationObserver(function () {
-      prepareAllForms();
-    });
-    obs.observe(document.documentElement, { childList: true, subtree: true });
+  function bindHijack() {
+    if (!embed || hijackBound) return;
+    hijackBound = true;
+    document.addEventListener("click", onIntercept, true);
+    document.addEventListener("submit", onIntercept, true);
+    log("embed submit hijack active");
   }
 
   applyConfig();
-  patchFormData();
-  patchFetch();
-  neutralizeSplit();
-  window.addEventListener("message", onParentMessage);
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", function () {
-      neutralizeSplit();
-      disableValidationSplitRouting();
-      prepareAllForms();
-    });
-  } else {
-    prepareAllForms();
-  }
-
-  watchForms();
-  disableValidationSplitRouting();
-
-  [0, 100, 500, 2000].forEach(function (ms) {
-    setTimeout(function () {
-      neutralizeSplit();
-      disableValidationSplitRouting();
-      prepareAllForms();
-    }, ms);
-  });
 
   if (embed) {
-    log("embed iframe referrer=" + (document.referrer || "").slice(0, 80));
+    window.addEventListener("load", function () {
+      setTimeout(bindHijack, 0);
+      setTimeout(bindHijack, 500);
+    });
+    if (document.readyState === "complete") {
+      setTimeout(bindHijack, 0);
+    }
+    log("embed mode referrer=" + (document.referrer || "").slice(0, 80));
   }
 
-  window.vwEmbedPrepareForms = prepareAllForms;
+  window.vwEmbedSubmit = embedSubmit;
 })();
