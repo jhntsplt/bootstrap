@@ -13,7 +13,7 @@
     debug: false,
   };
 
-  var storageAccessPromise = null;
+  var parentCtx = null;
 
   function log(msg) {
     if (cfg.debug) console.log("[vw-embed]", msg);
@@ -39,24 +39,57 @@
     return window.self !== window.top || qp("vw_embed") === "1";
   }
 
+  function landingFromReferrer() {
+    try {
+      if (!document.referrer) return "";
+      var here = window.location.hostname.replace(/^www\./i, "");
+      var h = new URL(document.referrer).hostname.replace(/^www\./i, "");
+      if (!h || h === here) return "";
+      return h;
+    } catch (e) {
+      return "";
+    }
+  }
+
   function embedContext() {
     var host = window.location.hostname.replace(/^www\./i, "");
     var funnel =
+      (parentCtx && (parentCtx.funnel || parentCtx.source || parentCtx.vw_source)) ||
       qp("funnel") ||
       qp("source") ||
       qp("vw_source") ||
       cfg.offerSource ||
       "";
     var domain =
+      (parentCtx && (parentCtx.domain || parentCtx.form_domain || parentCtx.vw_domain)) ||
       qp("domain") ||
       qp("form_domain") ||
       qp("vw_domain") ||
+      landingFromReferrer() ||
       host;
     return { host: host, domain: domain, funnel: funnel };
   }
 
+  function applySendContext(formData) {
+    var ctx = embedContext();
+    if (!ctx.domain || ctx.domain.length < 4) {
+      log("warn: landing domain missing — check iframe URL or parent postMessage");
+    }
+    formData.set("domain", ctx.domain || "");
+    formData.set("form_domain", ctx.domain || "");
+    formData.set("host", ctx.host || "");
+    if (ctx.funnel) {
+      formData.set("funnel", ctx.funnel);
+      formData.set("source", ctx.funnel);
+    }
+    formData.delete("test");
+    formData.delete("splt_remote");
+    formData.delete("split");
+    formData.delete("splt_split_test");
+  }
+
   function ensureHidden(form, name, value) {
-    if (!value) return;
+    if (value === undefined || value === null || value === "") return;
     var el = form.querySelector('input[name="' + name + '"]');
     if (!el) {
       el = document.createElement("input");
@@ -105,7 +138,10 @@
       'script[data-team-lead], script[src*="jhntsplt/jquery"]'
     );
     if (splitTag) {
-      splitTag.setAttribute("data-vw-embed-saved-team-lead", splitTag.getAttribute("data-team-lead") || "");
+      splitTag.setAttribute(
+        "data-vw-embed-saved-team-lead",
+        splitTag.getAttribute("data-team-lead") || ""
+      );
       splitTag.removeAttribute("data-team-lead");
     }
   }
@@ -121,32 +157,6 @@
     window.leadSplitTryRoute.__vwEmbedWrapped = true;
   }
 
-  function ensureStorageAccess() {
-    if (!document.requestStorageAccess) return Promise.resolve();
-    if (!storageAccessPromise) {
-      storageAccessPromise = document
-        .requestStorageAccess()
-        .then(function () {
-          log("storage access granted");
-        })
-        .catch(function () {
-          log("storage access skipped/denied");
-        });
-    }
-    return storageAccessPromise;
-  }
-
-  function warmSession() {
-    if (!isEmbedMode()) return;
-    var url = window.location.pathname + window.location.search;
-    fetch(url, { credentials: "include", cache: "no-store" })
-      .then(function () {
-        log("session warm (same-origin GET)");
-        prepareAllForms();
-      })
-      .catch(function () {});
-  }
-
   function patchFetch() {
     if (window.__vwEmbedFetchPatched) return;
     window.__vwEmbedFetchPatched = true;
@@ -156,28 +166,14 @@
     window.fetch = function (input, init) {
       var url = typeof input === "string" ? input : input && input.url;
       var opts = init ? Object.assign({}, init) : {};
-      if (
-        url &&
-        /\/integ\/send\.php/i.test(String(url)) &&
-        opts.body instanceof FormData
-      ) {
-        var ctx = embedContext();
-        opts.body.set("domain", ctx.domain);
-        opts.body.set("form_domain", ctx.domain);
-        opts.body.set("host", ctx.host);
-        if (ctx.funnel) {
-          opts.body.set("funnel", ctx.funnel);
-          opts.body.set("source", ctx.funnel);
+      if (url && /\/integ\/send\.php/i.test(String(url)) && isEmbedMode()) {
+        if (!(opts.body instanceof FormData) && opts.body == null && input instanceof Request) {
+          /* Request body stream — leave as-is */
+        } else if (opts.body instanceof FormData) {
+          applySendContext(opts.body);
+          if (!opts.credentials) opts.credentials = "include";
+          log("fetch send.php patched domain=" + embedContext().domain);
         }
-        opts.body.delete("test");
-        opts.body.delete("splt_remote");
-        opts.body.delete("split");
-        opts.body.delete("splt_split_test");
-        if (!opts.credentials) opts.credentials = "include";
-        log("fetch send.php patched");
-        return ensureStorageAccess().then(function () {
-          return orig(input, opts);
-        });
       }
       return orig.call(this, input, opts);
     };
@@ -190,33 +186,28 @@
     if (!form.matches(cfg.formSelector)) return;
     disableValidationSplitRouting();
     prepareForm(form);
-    ensureStorageAccess();
-    // document capture, регистрируем после split.js — режем только его capture, validation на form bubble остаётся
-    e.stopImmediatePropagation();
   }
 
-  function onPointerDown() {
-    if (!isEmbedMode()) return;
-    ensureStorageAccess();
+  function onParentMessage(e) {
+    if (!e || !e.data || e.data.type !== "vw_embed_ctx") return;
+    parentCtx = e.data;
+    prepareAllForms();
+    log("parent ctx domain=" + (parentCtx.domain || parentCtx.form_domain || ""));
   }
 
   applyConfig();
   patchFetch();
   neutralizeSplit();
-
+  window.addEventListener("message", onParentMessage);
   document.addEventListener("submit", onSubmitCapture, true);
-  document.addEventListener("pointerdown", onPointerDown, true);
-  document.addEventListener("focusin", onPointerDown, true);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       neutralizeSplit();
       prepareAllForms();
-      warmSession();
     });
   } else {
     prepareAllForms();
-    warmSession();
   }
 
   window.addEventListener("load", function () {
@@ -234,7 +225,7 @@
   });
 
   if (isEmbedMode()) {
-    log("embed mode top=" + (document.referrer || "").slice(0, 96));
+    log("embed mode referrer=" + (document.referrer || "").slice(0, 96));
   }
 
   window.vwEmbedPrepareForms = prepareAllForms;
