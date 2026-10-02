@@ -119,9 +119,11 @@
       fd.set("source", ctx.funnel);
     }
     fd.delete("test");
-    fd.delete("splt_remote");
     fd.delete("split");
     fd.delete("splt_split_test");
+    /* send.php: splt_remote=1 — штатный skip session/token для POST не с первого визита оффера */
+    fd.set("splt_remote", "1");
+    fd.set("vw_embed", "1");
   }
 
   function showError(form, msg) {
@@ -252,8 +254,10 @@
 
       phone.value = originalPhone;
       if (preloader) preloader.classList.add("hidden");
-      showError(form, responseError(data));
-      console.error("[vw-embed] send.php:", data || text.slice(0, 200));
+      var errText = responseError(data);
+      showError(form, errText);
+      console.error("[vw-embed] send.php FAIL:", errText);
+      console.error("[vw-embed] raw:", text.slice(0, 800));
       return true;
     } catch (err) {
       phone.value = originalPhone;
@@ -330,17 +334,27 @@
       qp("vw_embed")
   );
 
+  function warmSession() {
+    fetch(window.location.href, { credentials: "include", cache: "no-store" }).catch(
+      function () {}
+    );
+  }
+
   if (!embed) {
     console.warn(
       "[vw-embed] not in iframe — script idle (open via VW overlay or ?vw_embed=1)"
     );
   } else {
+    warmSession();
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", scheduleBind);
     } else {
       scheduleBind();
     }
-    window.addEventListener("load", scheduleBind);
+    window.addEventListener("load", function () {
+      warmSession();
+      scheduleBind();
+    });
     setTimeout(function () {
       if (!hijackBound) {
         console.warn("[vw-embed] hijack not bound — form.leadform missing?");
